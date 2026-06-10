@@ -1,5 +1,5 @@
 -- ============================================================
--- CLUBES DE LECTURA - BASE DE DATOS TRANSACCIONAL (NUEVO MODELO)
+-- CLUBES DE LECTURA - BASE DE DATOS TRANSACCIONAL
 -- Archivo: 04_vistas.sql
 -- Descripcion: Vistas para consultas frecuentes y soporte a funciones
 -- Prefijo: CASJ_
@@ -25,34 +25,32 @@ SELECT
     TRUNC(MONTHS_BETWEEN(SYSDATE, m.fecha_nacimiento) / 12) AS edad,
     m.email,
     m.telefono,
-    -- Nacionalidades
-    (SELECT LISTAGG(p.gentilicio, ', ') WITHIN GROUP (ORDER BY p.gentilicio)
-     FROM CASJ_MIEMBRO_NACIONALIDAD mn
-     JOIN CASJ_PAIS p ON mn.id_pais = p.id_pais
-     WHERE mn.id_miembro = m.id_miembro) AS nacionalidades,
-    -- Idiomas
+    -- Nacionalidad (FK directa)
+    p_nac.gentilicio AS nacionalidad,
+    -- Idiomas del miembro
     (SELECT LISTAGG(i.nombre, ', ') WITHIN GROUP (ORDER BY i.nombre)
-     FROM CASJ_IDIOMA_CLUB_LECTOR icl
-     JOIN CASJ_IDIOMA i ON icl.id_idioma = i.id_idioma
-     WHERE icl.id_club_lector = m.id_miembro) AS idiomas,
+     FROM casj_idioma_lector il
+     JOIN casj_idiomas i ON il.id_idioma = i.id_idioma
+     WHERE il.id_miembro = m.id_miembro) AS idiomas,
     -- Club activo
     hm.id_club,
     c.nombre AS club_actual,
     hm.fecha_inicio AS fecha_ingreso_club,
     TRUNC(MONTHS_BETWEEN(SYSDATE, hm.fecha_inicio)) AS meses_antiguedad,
     -- Grupo activo
-    gl.id_grupo,
-    gl.tipo AS tipo_grupo,
+    a.id_grupo,
+    DECODE(gl.tipo, 'A', 'ADULTO', 'J', 'JUVENIL', 'N', 'NINOS', gl.tipo) AS tipo_grupo,
     -- Representante
     r.nombre || ' ' || r.apellido AS representante
-FROM CASJ_MIEMBRO m
-LEFT JOIN CASJ_HISTORICO_MEMBRESIA hm ON m.id_miembro = hm.id_miembro
+FROM casj_miembros_lectores m
+LEFT JOIN casj_paises p_nac ON m.id_pais_nacionalidad = p_nac.id_pais
+LEFT JOIN casj_historico_membresia hm ON m.id_miembro = hm.id_miembro
     AND hm.activo = 'S'
-LEFT JOIN CASJ_CLUB c ON hm.id_club = c.id_club
-LEFT JOIN CASJ_ASIGNACION a ON m.id_miembro = a.id_miembro
+LEFT JOIN casj_clubes c ON hm.id_club = c.id_club
+LEFT JOIN casj_asignaciones a ON m.id_miembro = a.id_miembro
     AND a.fecha_fin IS NULL
-LEFT JOIN CASJ_GRUPO_LECTURA gl ON a.id_grupo = gl.id_grupo
-LEFT JOIN CASJ_REPRESENTANTE r ON m.id_representante = r.id_representante;
+LEFT JOIN casj_grupos_lectura gl ON a.id_club = gl.id_club AND a.id_grupo = gl.id_grupo
+LEFT JOIN casj_representantes r ON m.id_representante = r.id_representante;
 
 -- ============================================================
 -- 2. CASJ_VW_HISTORIAL_MIEMBRO
@@ -68,15 +66,15 @@ SELECT
     hm.motivo_salida,
     TRUNC(MONTHS_BETWEEN(NVL(hm.fecha_fin, SYSDATE), hm.fecha_inicio)) AS meses_en_club,
     -- Libros analizados en ese club
-    (SELECT COUNT(DISTINCT cal.ISBN)
-     FROM CASJ_CALENDARIO_REUNION_MES cal
-     JOIN CASJ_GRUPO_LECTURA gl ON cal.id_grupo = gl.id_grupo
-     JOIN CASJ_ASIGNACION asig ON asig.id_grupo = gl.id_grupo
+    (SELECT COUNT(DISTINCT cal.isbn)
+     FROM casj_calendario_reunion_mes cal
+     JOIN casj_asignaciones asig ON asig.id_club = cal.id_club
+        AND asig.id_grupo = cal.id_grupo
         AND asig.id_miembro = m.id_miembro
-     WHERE gl.id_club = c.id_club AND cal.realizada = 'S') AS libros_analizados
-FROM CASJ_MIEMBRO m
-JOIN CASJ_HISTORICO_MEMBRESIA hm ON m.id_miembro = hm.id_miembro
-JOIN CASJ_CLUB c ON hm.id_club = c.id_club
+     WHERE cal.id_club = c.id_club AND cal.realizada = 'S') AS libros_analizados
+FROM casj_miembros_lectores m
+JOIN casj_historico_membresia hm ON m.id_miembro = hm.id_miembro
+JOIN casj_clubes c ON hm.id_club = c.id_club
 ORDER BY m.id_miembro, hm.fecha_inicio;
 
 -- ============================================================
@@ -96,74 +94,79 @@ SELECT
     inst.nombre AS institucion,
     -- Idiomas del club
     (SELECT LISTAGG(i.nombre, ', ') WITHIN GROUP (ORDER BY i.nombre)
-     FROM CASJ_IDIOMA_CLUB_LECTOR icl
-     JOIN CASJ_IDIOMA i ON icl.id_idioma = i.id_idioma
-     WHERE icl.id_club_lector = c.id_club) AS idiomas,
-    -- Grupos
-    (SELECT COUNT(*) FROM CASJ_GRUPO_LECTURA gl WHERE gl.id_club = c.id_club AND gl.tipo = 'ADULTO') AS grupos_adultos,
-    (SELECT COUNT(*) FROM CASJ_GRUPO_LECTURA gl WHERE gl.id_club = c.id_club AND gl.tipo = 'JUVENIL') AS grupos_juveniles,
-    (SELECT COUNT(*) FROM CASJ_GRUPO_LECTURA gl WHERE gl.id_club = c.id_club AND gl.tipo = 'INFANTIL') AS grupos_infantiles,
+     FROM casj_idioma_lector il
+     JOIN casj_idiomas i ON il.id_idioma = i.id_idioma
+     WHERE il.id_club = c.id_club) AS idiomas,
+    -- Grupos por tipo
+    (SELECT COUNT(*) FROM casj_grupos_lectura gl WHERE gl.id_club = c.id_club AND gl.tipo = 'A') AS grupos_adultos,
+    (SELECT COUNT(*) FROM casj_grupos_lectura gl WHERE gl.id_club = c.id_club AND gl.tipo = 'J') AS grupos_juveniles,
+    (SELECT COUNT(*) FROM casj_grupos_lectura gl WHERE gl.id_club = c.id_club AND gl.tipo = 'N') AS grupos_ninos,
     -- Total miembros activos
     (SELECT COUNT(DISTINCT hm.id_miembro)
-     FROM CASJ_HISTORICO_MEMBRESIA hm
+     FROM casj_historico_membresia hm
      WHERE hm.id_club = c.id_club AND hm.activo = 'S') AS miembros_activos,
     -- Clubes asociados
     (SELECT LISTAGG(c2.nombre, ', ') WITHIN GROUP (ORDER BY c2.nombre)
-     FROM CASJ_ASOCIADOS a
-     JOIN CASJ_CLUB c2 ON (CASE WHEN a.id_club_1 = c.id_club THEN a.id_club_2 ELSE a.id_club_1 END) = c2.id_club
-     WHERE a.id_club_1 = c.id_club OR a.id_club_2 = c.id_club) AS clubes_asociados
-FROM CASJ_CLUB c
-JOIN CASJ_CIUDAD ci ON c.id_ciudad = ci.id_ciudad
-JOIN CASJ_PAIS p ON ci.id_pais = p.id_pais
-LEFT JOIN CASJ_INSTITUCION inst ON c.id_institucion = inst.id_institucion;
+     FROM casj_asociados a
+     JOIN casj_clubes c2 ON (CASE WHEN a.id_club = c.id_club THEN a.id_club_asociado ELSE a.id_club END) = c2.id_club
+     WHERE a.id_club = c.id_club OR a.id_club_asociado = c.id_club) AS clubes_asociados
+FROM casj_clubes c
+JOIN casj_ciudades ci ON c.id_ciudad = ci.id_ciudad
+JOIN casj_paises p ON ci.id_pais = p.id_pais
+LEFT JOIN casj_instituciones inst ON c.id_institucion = inst.id_institucion;
 
 -- ============================================================
 -- 4. CASJ_VW_FICHA_LIBRO
 -- ============================================================
 CREATE OR REPLACE VIEW CASJ_VW_FICHA_LIBRO AS
 SELECT
-    l.ISBN,
+    l.isbn,
     l.titulo,
     l.anio_publicacion,
     l.cantidad_pag,
     l.tipo_narrativa,
     l.temas_resumen,
     l.sinopsis,
+    p.nombre AS pais_publicacion,
+    i.nombre AS idioma,
+    l.orden_lectura,
     -- Autores
     (SELECT LISTAGG(au.nombre || ' ' || NVL(au.apellido,''), ', ') WITHIN GROUP (ORDER BY au.apellido)
-     FROM CASJ_LIBRO_AUTOR la
-     JOIN CASJ_AUTOR au ON la.id_autor = au.id_autor
-     WHERE la.ISBN = l.ISBN) AS autores,
+     FROM casj_libro_autor la
+     JOIN casj_autores au ON la.id_autor = au.id_autor
+     WHERE la.isbn = l.isbn) AS autores,
     -- Valoracion promedio
-    (SELECT ROUND(AVG(cal.valoracionfinal), 2)
-     FROM CASJ_CALENDARIO_REUNION_MES cal
-     WHERE cal.ISBN = l.ISBN AND cal.valoracionfinal IS NOT NULL) AS valoracion_promedio,
+    (SELECT ROUND(AVG(cal.valoracion_final), 2)
+     FROM casj_calendario_reunion_mes cal
+     WHERE cal.isbn = l.isbn AND cal.valoracion_final IS NOT NULL) AS valoracion_promedio,
     -- Veces discutido
     (SELECT COUNT(*)
-     FROM CASJ_CALENDARIO_REUNION_MES cal
-     WHERE cal.ISBN = l.ISBN AND cal.realizada = 'S') AS veces_analizado
-FROM CASJ_LIBRO l;
+     FROM casj_calendario_reunion_mes cal
+     WHERE cal.isbn = l.isbn AND cal.realizada = 'S') AS veces_analizado
+FROM casj_libros l
+LEFT JOIN casj_paises p ON l.id_pais_publicacion = p.id_pais
+LEFT JOIN casj_idiomas i ON l.id_idioma = i.id_idioma;
 
 -- ============================================================
 -- 5. CASJ_VW_LIBROS_VALORADOS
 -- ============================================================
 CREATE OR REPLACE VIEW CASJ_VW_LIBROS_VALORADOS AS
 SELECT
-    l.ISBN,
+    l.isbn,
     l.titulo,
     (SELECT LISTAGG(au.nombre || ' ' || NVL(au.apellido,''), ', ') WITHIN GROUP (ORDER BY au.apellido)
-     FROM CASJ_LIBRO_AUTOR la
-     JOIN CASJ_AUTOR au ON la.id_autor = au.id_autor
-     WHERE la.ISBN = l.ISBN) AS autores,
+     FROM casj_libro_autor la
+     JOIN casj_autores au ON la.id_autor = au.id_autor
+     WHERE la.isbn = l.isbn) AS autores,
     c.nombre AS club,
-    ROUND(AVG(cal.valoracionfinal), 2) AS valoracion_promedio,
-    COUNT(cal.id_calendario) AS veces_analizado
-FROM CASJ_LIBRO l
-JOIN CASJ_CALENDARIO_REUNION_MES cal ON l.ISBN = cal.ISBN
-JOIN CASJ_GRUPO_LECTURA gl ON cal.id_grupo = gl.id_grupo
-JOIN CASJ_CLUB c ON gl.id_club = c.id_club
-WHERE cal.realizada = 'S' AND cal.valoracionfinal IS NOT NULL
-GROUP BY l.ISBN, l.titulo, c.nombre
+    ROUND(AVG(cal.valoracion_final), 2) AS valoracion_promedio,
+    COUNT(*) AS veces_analizado
+FROM casj_libros l
+JOIN casj_calendario_reunion_mes cal ON l.isbn = cal.isbn
+JOIN casj_grupos_lectura gl ON cal.id_club = gl.id_club AND cal.id_grupo = gl.id_grupo
+JOIN casj_clubes c ON gl.id_club = c.id_club
+WHERE cal.realizada = 'S' AND cal.valoracion_final IS NOT NULL
+GROUP BY l.isbn, l.titulo, c.nombre
 ORDER BY valoracion_promedio DESC, l.titulo;
 
 -- ============================================================
@@ -181,17 +184,17 @@ SELECT
     TRUNC(MONTHS_BETWEEN(SYSDATE, m.fecha_nacimiento) / 12) AS edad,
     c.id_club,
     c.nombre AS club,
-    gl.id_grupo,
-    gl.tipo AS tipo_grupo,
+    a.id_grupo,
+    DECODE(gl.tipo, 'A', 'ADULTO', 'J', 'JUVENIL', 'N', 'NINOS', gl.tipo) AS tipo_grupo,
     hm.fecha_inicio AS miembro_desde,
     a.fecha_inicio AS en_grupo_desde
-FROM CASJ_MIEMBRO m
-JOIN CASJ_HISTORICO_MEMBRESIA hm ON m.id_miembro = hm.id_miembro
+FROM casj_miembros_lectores m
+JOIN casj_historico_membresia hm ON m.id_miembro = hm.id_miembro
     AND hm.activo = 'S'
-JOIN CASJ_CLUB c ON hm.id_club = c.id_club
-JOIN CASJ_ASIGNACION a ON m.id_miembro = a.id_miembro
+JOIN casj_clubes c ON hm.id_club = c.id_club
+JOIN casj_asignaciones a ON m.id_miembro = a.id_miembro
     AND a.fecha_fin IS NULL
-JOIN CASJ_GRUPO_LECTURA gl ON a.id_grupo = gl.id_grupo
+JOIN casj_grupos_lectura gl ON a.id_club = gl.id_club AND a.id_grupo = gl.id_grupo
 ORDER BY c.nombre, gl.tipo, m.primer_apellido;
 
 -- ============================================================
@@ -203,26 +206,28 @@ SELECT
     m.id_miembro,
     m.primer_nombre || ' ' || m.primer_apellido || ' ' || m.segundo_apellido AS nombre_completo,
     c.nombre AS club,
-    gl.tipo AS tipo_grupo,
-    EXTRACT(YEAR FROM cal.fecha) AS anio,
-    CEIL(EXTRACT(MONTH FROM cal.fecha) / 2) AS bimestre,
-    COUNT(cal.id_calendario) - COUNT(i.id_calendario) AS reuniones_asistidas,
-    COUNT(cal.id_calendario) AS total_reuniones,
-    ROUND((COUNT(cal.id_calendario) - COUNT(i.id_calendario)) * 100.0 / 
-          NULLIF(COUNT(cal.id_calendario), 0), 2) AS porcentaje_asistencia
-FROM CASJ_MIEMBRO m
-JOIN CASJ_ASIGNACION asig ON m.id_miembro = asig.id_miembro
-JOIN CASJ_GRUPO_LECTURA gl ON asig.id_grupo = gl.id_grupo
-JOIN CASJ_CLUB c ON gl.id_club = c.id_club
-JOIN CASJ_CALENDARIO_REUNION_MES cal ON gl.id_grupo = cal.id_grupo
-    AND cal.fecha >= asig.fecha_inicio 
-    AND (asig.fecha_fin IS NULL OR cal.fecha <= asig.fecha_fin)
+    DECODE(gl.tipo, 'A', 'ADULTO', 'J', 'JUVENIL', 'N', 'NINOS', gl.tipo) AS tipo_grupo,
+    EXTRACT(YEAR FROM cal.fecha_reunion) AS anio,
+    CEIL(EXTRACT(MONTH FROM cal.fecha_reunion) / 2) AS bimestre,
+    COUNT(*) - COUNT(ina.id_miembro) AS reuniones_asistidas,
+    COUNT(*) AS total_reuniones,
+    ROUND((COUNT(*) - COUNT(ina.id_miembro)) * 100.0 /
+          NULLIF(COUNT(*), 0), 2) AS porcentaje_asistencia
+FROM casj_miembros_lectores m
+JOIN casj_asignaciones asig ON m.id_miembro = asig.id_miembro
+JOIN casj_grupos_lectura gl ON asig.id_club = gl.id_club AND asig.id_grupo = gl.id_grupo
+JOIN casj_clubes c ON gl.id_club = c.id_club
+JOIN casj_calendario_reunion_mes cal ON gl.id_club = cal.id_club AND gl.id_grupo = cal.id_grupo
+    AND cal.fecha_reunion >= asig.fecha_inicio
+    AND (asig.fecha_fin IS NULL OR cal.fecha_reunion <= asig.fecha_fin)
     AND cal.realizada = 'S'
-LEFT JOIN CASJ_INASISTENCIA i ON cal.id_calendario = i.id_calendario 
-    AND i.id_miembro = m.id_miembro
+LEFT JOIN casj_inasistencias ina ON cal.id_club = ina.id_club
+    AND cal.id_grupo = ina.id_grupo
+    AND cal.fecha_reunion = ina.fecha_reunion
+    AND ina.id_miembro = m.id_miembro
 GROUP BY m.id_miembro, m.primer_nombre, m.primer_apellido, m.segundo_apellido,
          c.nombre, gl.tipo,
-         EXTRACT(YEAR FROM cal.fecha), CEIL(EXTRACT(MONTH FROM cal.fecha) / 2)
+         EXTRACT(YEAR FROM cal.fecha_reunion), CEIL(EXTRACT(MONTH FROM cal.fecha_reunion) / 2)
 ORDER BY anio, bimestre, c.nombre, nombre_completo;
 
 -- ============================================================
@@ -231,22 +236,22 @@ ORDER BY anio, bimestre, c.nombre, nombre_completo;
 -- ============================================================
 CREATE OR REPLACE VIEW CASJ_VW_ORDEN_LECTURA AS
 SELECT
+    l2.titulo AS libro,
+    l2.anio_publicacion AS anio,
+    l2.orden_lectura,
     l1.titulo AS libro_anterior,
     l1.anio_publicacion AS anio_anterior,
-    l2.titulo AS libro_siguiente,
-    l2.anio_publicacion AS anio_siguiente,
     (SELECT LISTAGG(au.nombre || ' ' || NVL(au.apellido,''), ', ') WITHIN GROUP (ORDER BY au.apellido)
-     FROM CASJ_LIBRO_AUTOR la
-     JOIN CASJ_AUTOR au ON la.id_autor = au.id_autor
-     WHERE la.ISBN = l1.ISBN) AS autor
-FROM CASJ_LIBRO l2
-JOIN CASJ_LIBRO l1 ON l2.ISBN_orden = l1.ISBN
-ORDER BY autor;
+     FROM casj_libro_autor la
+     JOIN casj_autores au ON la.id_autor = au.id_autor
+     WHERE la.isbn = l2.isbn) AS autor
+FROM casj_libros l2
+JOIN casj_libros l1 ON l2.isbn_anterior = l1.isbn
+ORDER BY autor, l2.orden_lectura;
 
 -- ============================================================
 -- 9. CASJ_VW_PAISES_MONEDAS
 -- Vista auxiliar para la funcion de conversion monetaria
--- Muestra paises disponibles con su moneda
 -- ============================================================
 CREATE OR REPLACE VIEW CASJ_VW_PAISES_MONEDAS AS
 SELECT
@@ -265,6 +270,7 @@ SELECT
         WHEN 'INR' THEN 'Rupia India'
         WHEN 'BRL' THEN 'Real Brasileno'
         WHEN 'CNY' THEN 'Yuan Chino'
+        WHEN 'CAD' THEN 'Dolar Canadiense'
         ELSE p.moneda
     END AS nombre_moneda,
     CASE p.moneda
@@ -279,11 +285,12 @@ SELECT
         WHEN 'INR' THEN 83.25
         WHEN 'BRL' THEN 4.97
         WHEN 'CNY' THEN 7.24
+        WHEN 'CAD' THEN 1.36
         ELSE 1.0
     END AS tasa_vs_usd
-FROM CASJ_PAIS p;
+FROM casj_paises p;
 
 -- ============================================================
 -- VERIFICACION
 -- ============================================================
-SELECT view_name FROM user_views WHERE view_name LIKE 'CASJ_%' ORDER BY view_name;
+SELECT view_name FROM user_views WHERE UPPER(view_name) LIKE 'CASJ_%' ORDER BY view_name;
